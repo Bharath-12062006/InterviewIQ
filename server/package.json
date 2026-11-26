@@ -1,0 +1,25 @@
+{
+  "name": "interviewiq-server",
+  "version": "1.0.0",
+  "description": "Backend API and MongoDB service for InterviewIQ",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "seed": "node src/seed.js",
+    "db:start": "powershell -Command \"if (-not (Test-Path './data/db')) { New-Item -ItemType Directory -Path './data/db' -Force }; & 'C:\\Program Files\\MongoDB\\Server\\8.0\\bin\\mongod.exe' --dbpath ./data/db --port 27017\""
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.2",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
