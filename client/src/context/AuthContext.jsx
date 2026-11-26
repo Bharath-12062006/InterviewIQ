@@ -215,6 +215,7 @@ export function AuthProvider({ children }) {
 
   const logout = () => {
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    localStorage.removeItem('interviewiq_resume');
     clearUserProfile();
     setUser(initialUserProfile);
     setIsAuthenticated(false);

@@ -43,56 +43,7 @@ export const initialSettings = {
   privacyShareStats: true,
 };
 
-export const initialResumeData = {
-  fileName: 'Candidate_Resume.pdf',
-  fileSize: '1.4 MB',
-  uploadDate: '2026-11-21',
-  atsScore: 84,
-  targetRole: 'Software Engineer',
-  summary: 'Strong backend & algorithms candidate with hands-on MERN stack and distributed systems projects. Excellent alignment with campus SDE placement criteria.',
-  extracted: {
-    education: [
-      { institution: 'Anna University, CEG', degree: 'B.E. Computer Science and Engineering', period: '2023 - 2027', grade: '8.84 CGPA' },
-      { institution: 'Kendriya Vidyalaya', degree: 'Higher Secondary (Class XII CBSE)', period: '2021 - 2023', grade: '96.2%' }
-    ],
-    experience: [
-      {
-        company: 'FinTech Labs',
-        role: 'Software Engineering Intern',
-        period: 'May 2026 - Jul 2026',
-        location: 'Bengaluru, India',
-        points: [
-          'Engineered high-throughput idempotency keys for transaction processing pipeline handling 12,000 req/sec in Go & Redis.',
-          'Reduced p99 database latency by 34% by redesigning PostgreSQL composite indexes and partitioning transaction logs.'
-        ]
-      }
-    ],
-    projects: [
-      {
-        name: 'Distributed Task Queue Engine',
-        tech: 'Node.js, Redis, Docker, TypeScript',
-        description: 'Fault-tolerant distributed job worker cluster supporting retry backoffs, dead-letter queues, and real-time WebSocket dashboard.'
-      },
-      {
-        name: 'Campus Placement Prep Portal',
-        tech: 'React, Tailwind, Express, MongoDB',
-        description: 'Full-stack collaborative portal with real-time room scheduling, code evaluation sandbox, and peer benchmarking.'
-      }
-    ],
-    skills: ['Python', 'Java', 'C++', 'Data Structures', 'Algorithms', 'SQL', 'PostgreSQL', 'Redis', 'React', 'Node.js', 'Docker', 'Git']
-  },
-  missingSkills: [
-    { skill: 'Kubernetes & CI/CD', importance: 'High', reason: 'Commonly expected in enterprise cloud microservices deployments.' },
-    { skill: 'System Design / LLD Patterns', importance: 'High', reason: 'Crucial for SDE second technical and machine coding rounds.' },
-    { skill: 'Unit & Integration Testing (Jest/JUnit)', importance: 'Medium', reason: 'Industry standard for code quality assurance in product companies.' }
-  ],
-  suggestedQuestions: [
-    { category: 'Distributed Systems', question: 'In your Distributed Task Queue project, how did you guarantee at-least-once message delivery when worker nodes crashed?' },
-    { category: 'Databases & Concurrency', question: 'At FinTech Labs, how did you manage race conditions and transaction isolation levels when handling 12,000 requests per second?' },
-    { category: 'Data Structures & Algorithms', question: 'How would you implement an LRU cache eviction policy for your Redis-backed caching layer from scratch?' },
-    { category: 'OOP & Clean Architecture', question: 'Walk me through the design patterns you utilized to separate the job scheduler from the worker execution pool.' }
-  ]
-};
+export const initialResumeData = null;
 
 export const initialInterviews = [
   {

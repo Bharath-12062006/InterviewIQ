@@ -17,8 +17,9 @@ function getAuthHeader() {
 
 async function request(endpoint, options = {}) {
   const url = endpoint.startsWith('http') ? endpoint : `${API_BASE}${endpoint}`;
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...getAuthHeader(),
     ...options.headers,
   };
@@ -28,7 +29,7 @@ async function request(endpoint, options = {}) {
     headers,
   };
 
-  if (options.body && typeof options.body === 'object') {
+  if (options.body && !isFormData && typeof options.body === 'object') {
     config.body = JSON.stringify(options.body);
   }
 
