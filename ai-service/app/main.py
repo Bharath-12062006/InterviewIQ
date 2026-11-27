@@ -12,7 +12,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import ats
+from .routers import ats, interview
+from .services.llm_client import check_llm_health
+from .services.transcriber import check_whisper_status
 
 app = FastAPI(
     title="InterviewIQ AI Service",
@@ -33,11 +35,18 @@ app.add_middleware(
 )
 
 app.include_router(ats.router)
+app.include_router(interview.router)
+
+
+@app.get("/ping", tags=["system"])
+def ping() -> dict:
+    """Fast local liveness check for Express process management."""
+    return {"status": "ok"}
 
 
 @app.get("/health", tags=["system"])
-def health() -> dict:
-    """Liveness plus a capability report for the extraction backends."""
+async def health() -> dict:
+    """Liveness plus capability and live LLM availability check."""
     capabilities = {"pdf": False, "docx": False, "ocr": False, "spacy": False, "tfidf": False}
 
     try:
@@ -81,6 +90,8 @@ def health() -> dict:
         "version": settings.version,
         "scoringVersion": settings.scoring_version,
         "capabilities": capabilities,
+        "llm": await check_llm_health(),
+        "whisper": check_whisper_status(),
         "maxUploadMb": settings.max_upload_bytes // (1024 * 1024),
         "internalKeyRequired": bool(settings.internal_key),
     }

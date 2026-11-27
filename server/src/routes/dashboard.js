@@ -10,7 +10,10 @@ const router = express.Router();
 router.get('/', protect, async (req, res) => {
   try {
     const user = req.user;
-    const interviews = await Interview.find({ userId: user._id }).sort({ createdAt: -1 }).limit(10);
+    const interviews = await Interview.find({
+      userId: user._id,
+      status: { $ne: 'active' },
+    }).sort({ createdAt: -1 }).limit(10);
     const studyPlan = await StudyPlan.findOne({ userId: user._id });
 
     const avgScore = interviews.length > 0

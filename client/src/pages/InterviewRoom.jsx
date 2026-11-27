@@ -1,420 +1,1159 @@
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { 
-  Mic, MicOff, Volume2, Sparkles, Send, ArrowRight, 
-  Clock, ShieldAlert, CheckCircle, RefreshCw, MessageSquare, AlertCircle
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import {
+  AlertCircle,
+  Clock,
+  FastForward,
+  FileText,
+  Loader2,
+  Maximize2,
+  Mic,
+  MicOff,
+  Minimize2,
+  PhoneOff,
+  Radio,
+  Sparkles,
+  Volume2,
+  VolumeX,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
-import { addInterview } from '../data/mock';
 import { api } from '../lib/api';
 
-const QUESTION_BANK = {
-  'DSA': [
-    {
-      q: 'Explain the difference between Dijkstra’s algorithm and Bellman-Ford algorithm. When is Bellman-Ford required?',
-      followUp: 'How would you detect a negative cycle using Bellman-Ford?',
-      model: 'Dijkstra works with non-negative edge weights using a greedy min-heap in O((V+E)logV). Bellman-Ford handles negative weights and detects negative weight cycles by relaxing all edges V-1 times in O(V*E).'
-    },
-    {
-      q: 'Given an array of integers, how would you find the length of the longest subarray having sum equal to K?',
-      followUp: 'What if the array contains negative numbers as well?',
-      model: 'For non-negative numbers, a sliding window works in O(N) time and O(1) space. If negative numbers exist, use a prefix sum hash map storing first occurrences in O(N) time and O(N) space.'
-    },
-    {
-      q: 'How does a Trie data structure work, and what are its performance advantages over a Hash Table for string prefix lookups?',
-      followUp: 'What is the memory trade-off of a naive Trie and how can it be compacted?',
-      model: 'A Trie stores characters along branch paths, allowing prefix queries in O(L) where L is prefix length, independent of the number of keys. Hash tables require hashing full strings and lack ordered prefix traversal.'
-    }
-  ],
-  'DBMS': [
-    {
-      q: 'Explain the ACID properties of a relational database management system with real-world banking examples.',
-      followUp: 'How does a write-ahead log (WAL) guarantee durability during sudden power failures?',
-      model: 'Atomicity (all-or-nothing), Consistency (integrity constraints), Isolation (concurrent safety), and Durability (committed changes persist). WAL logs transactions to disk before modifying actual data pages.'
-    },
-    {
-      q: 'Compare B-Tree and B+ Tree indexing structures. Why do almost all production relational engines prefer B+ Trees?',
-      followUp: 'What makes B+ Trees superior for range queries like BETWEEN 10 AND 50?',
-      model: 'B+ Trees store all actual record keys in leaf nodes connected by a linked list, leaving internal nodes for navigation only. This maximizes branching factor, lowers tree height, and enables sequential leaf scans for range queries.'
-    }
-  ],
-  'Python': [
-    {
-      q: 'Explain how memory management and garbage collection work in CPython.',
-      followUp: 'What is the purpose of the cyclic garbage collector alongside reference counting?',
-      model: 'CPython relies primarily on reference counting. When a reference drops to zero, memory is immediately deallocated. A supplemental cyclic garbage collector periodically detects self-referencing reference cycles.'
-    },
-    {
-      q: 'What is the Python Global Interpreter Lock (GIL) and how does it impact multi-threaded versus multi-process code?',
-      followUp: 'In what scenarios does a multi-threaded Python program actually achieve concurrent speedups?',
-      model: 'The GIL ensures only one thread executes Python bytecode at any moment, limiting CPU-bound multithreading. Multi-processing bypasses the GIL with separate processes. I/O-bound tasks still benefit from multithreading.'
-    }
-  ],
-  'HR': [
-    {
-      q: 'Tell me about yourself, your academic background, and what inspired you to pursue software engineering.',
-      followUp: 'What is a technical project you are proudest of and what was your individual contribution?',
-      model: 'Structure with present, past, future. Highlight academic highlights, hands-on passion, and direct alignment with this role.'
-    },
-    {
-      q: 'Describe a situation where a project deadline was at risk. How did you prioritize and deliver under pressure?',
-      followUp: 'What would you do differently if faced with that situation again?',
-      model: 'Use the STAR format: Situation, Task, Action, Result. Highlight pragmatic trade-offs, clear team communication, and successful delivery.'
-    }
-  ],
-};
+function formatClock(totalSeconds) {
+  const safe = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
 
-export default function InterviewRoom() {
-  const navigate = useNavigate();
-  const [params] = useSearchParams();
+function makeSubmissionId() {
+  return `sub_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
-  const category = params.get('category') || 'DSA';
-  const difficulty = params.get('difficulty') || 'Intermediate';
-  const mode = params.get('mode') || 'Strict Technical';
-  const seedQuestion = params.get('seedQuestion');
+function readAuthToken() {
+  try {
+    const raw = localStorage.getItem('interviewiq_auth_session');
+    return raw ? JSON.parse(raw)?.token || '' : '';
+  } catch {
+    return '';
+  }
+}
 
-  // Build question set
-  const initialQuestions = QUESTION_BANK[category] || QUESTION_BANK['DSA'];
-  const questions = seedQuestion
-    ? [{ q: seedQuestion, followUp: 'Can you walk me through the trade-offs of that approach?', model: 'Comprehensive discussion of design choices and edge cases.' }, ...initialQuestions]
-    : initialQuestions;
+function pickSupportedAudioMime() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/mp4',
+  ];
+  return candidates.find((c) => MediaRecorder.isTypeSupported?.(c)) || '';
+}
 
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [inputMode, setInputMode] = useState('text'); // 'text' | 'voice'
-  const [answer, setAnswer] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
-  const [showFollowUp, setShowFollowUp] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [timerSeconds, setTimerSeconds] = useState(15 * 60);
-  const [evaluatedAnswers, setEvaluatedAnswers] = useState([]);
-
-  const currentQ = questions[currentIndex] || questions[0];
-
-  // Timer countdown
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimerSeconds((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const formatTimer = (secs) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
-
-  const handleToggleVoice = () => {
-    if (isRecording) {
-      setIsRecording(false);
-    } else {
-      setIsRecording(true);
-      // Simulate live transcription stream
-      setTimeout(() => {
-        setAnswer((prev) =>
-          prev
-            ? `${prev} Additionally, considering time complexity and edge cases...`
-            : `In my experience with ${category}, we approach this by first analyzing the fundamental invariants and choosing the optimal data structures.`
-        );
-      }, 1800);
-    }
-  };
-
-  const handleSpeakQuestion = () => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(currentQ.q);
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
-    } else {
-      setIsSpeaking(true);
-      setTimeout(() => setIsSpeaking(false), 2500);
-    }
-  };
-
-  const handleTriggerFollowUp = () => {
-    setShowFollowUp(true);
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.speak(new SpeechSynthesisUtterance(currentQ.followUp));
-    }
-  };
-
-  const handleNextOrFinish = async () => {
-    const recordedAnswer = answer.trim() || 'Candidate provided verbal answer during the session.';
-    const scoreVal = Math.floor(Math.random() * 20) + 75; // 75 - 95 score
-
-    const questionResult = {
-      id: currentIndex + 1,
-      question: currentQ.q,
-      candidateAnswer: recordedAnswer,
-      score: Number((scoreVal / 10).toFixed(1)),
-      feedback: `Good coverage of core ${category} concepts. Strong communication tone.`,
-      modelAnswer: currentQ.model,
-    };
-
-    const nextResults = [...evaluatedAnswers, questionResult];
-    setEvaluatedAnswers(nextResults);
-    setAnswer('');
-    setShowFollowUp(false);
-    setIsRecording(false);
-
-    if (currentIndex + 1 < questions.length) {
-      setCurrentIndex((c) => c + 1);
-    } else {
-      // Completed interview! Save to MongoDB and navigate to Report
-      const newId = `iv-${Date.now()}`;
-      const avgScore = Math.round(
-        nextResults.reduce((acc, q) => acc + parseFloat(q.score) * 10, 0) / nextResults.length
-      );
-
-      const newReport = {
-        id: newId,
-        category,
-        mode,
-        difficulty,
-        date: new Date().toISOString().split('T')[0],
-        minutes: Math.max(1, Math.round((15 * 60 - timerSeconds) / 60)),
-        score: avgScore,
-        rubric: {
-          technical: avgScore + 2,
-          problemSolving: avgScore - 3,
-          communication: avgScore + 4,
-          confidence: avgScore - 1,
-        },
-        summary: `Strong technical proficiency demonstrated in ${category}. Answered ${questions.length} questions with solid composure and relevant structural examples.`,
-        strengths: [
-          `Clear conceptual understanding of ${category} fundamentals`,
-          'Logical verbal pacing and deliberate explanation',
-          'Identified appropriate asymptotic trade-offs',
-        ],
-        improvements: [
-          'Elaborate more on memory footprint and cache locality',
-          'Practice structuring answers around concrete real-world metrics',
-        ],
-        questions: nextResults,
-      };
-
-      try {
-        await api.post('/interviews', newReport);
-      } catch (err) {
-        console.info('Interview save DB notice:', err.message);
-      }
-      addInterview(newReport);
-      navigate(`/report/${newId}`);
-    }
-  };
+function AiInterviewerAvatar({ status, name }) {
+  const isSpeaking = status === 'speaking';
+  const isListening = status === 'listening';
+  const isThinking = status === 'thinking';
 
   return (
-    <div className="space-y-6">
-      {/* Live Room Top Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-navy-900 px-6 py-4 text-white shadow-panel">
-        <div className="flex items-center gap-3">
-          <span className="flex h-3 w-3 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose opacity-75" />
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-rose" />
-          </span>
-          <div>
-            <h2 className="font-display text-base font-bold text-white">
-              {category} Interview Room
-            </h2>
-            <p className="text-xs text-white/60">
-              Interviewer: <strong className="text-white">{mode}</strong> · Level: {difficulty}
-            </p>
-          </div>
+    <div className="relative flex items-center justify-center">
+      <div
+        className={`absolute h-48 w-48 rounded-full transition-all duration-500 sm:h-56 sm:w-56 ${
+          isSpeaking
+            ? 'animate-ping bg-signal/20'
+            : isListening
+              ? 'animate-pulse bg-jade/20'
+              : isThinking
+                ? 'animate-spin bg-gradient-to-tr from-amber-500/25 via-signal/15 to-transparent'
+                : 'bg-signal/10'
+        }`}
+        style={{ animationDuration: isThinking ? '3s' : '2s' }}
+      />
+      <div
+        className={`relative flex h-40 w-40 items-center justify-center rounded-full border-2 shadow-2xl transition-colors duration-300 sm:h-48 sm:w-48 ${
+          isSpeaking
+            ? 'border-signal bg-navy-900/90 shadow-signal/30'
+            : isListening
+              ? 'border-jade bg-navy-900/90 shadow-jade/30'
+              : isThinking
+                ? 'border-amber-400 bg-navy-900/90 shadow-amber-500/25'
+                : 'border-line bg-navy-900/90'
+        }`}
+      >
+        <svg viewBox="0 0 120 120" className="h-28 w-28 sm:h-32 sm:w-32" aria-label={name}>
+          <defs>
+            <linearGradient id="iqAvatarGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#6366f1" />
+              <stop offset="100%" stopColor="#38bdf8" />
+            </linearGradient>
+          </defs>
+          <circle cx="60" cy="42" r="21" fill="url(#iqAvatarGrad)" opacity="0.92" />
+          <path d="M24 102 C24 79 40 68 60 68 C80 68 96 79 96 102" fill="url(#iqAvatarGrad)" opacity="0.88" />
+          <path d="M36 44 C36 27 84 27 84 44" fill="none" stroke="#e2e8f0" strokeWidth="3" strokeLinecap="round" />
+          <rect x="33" y="40" width="5" height="12" rx="2.5" fill="#e2e8f0" />
+          <rect x="82" y="40" width="5" height="12" rx="2.5" fill="#e2e8f0" />
+          <path d="M84 50 Q80 60 66 59" fill="none" stroke="#94a3b8" strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+export default function InterviewRoom() {
+  const { sessionId } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const initialFromNav = location.state?.initialSession;
+  const hasMatchingInitial = Boolean(
+    sessionId && initialFromNav && (initialFromNav.id === sessionId || initialFromNav._id === sessionId)
+  );
+
+  const [session, setSession] = useState(() => (hasMatchingInitial ? initialFromNav : null));
+  const [loadingSession, setLoadingSession] = useState(!hasMatchingInitial);
+  const [bootError, setBootError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [endError, setEndError] = useState('');
+  const [lastEndReason, setLastEndReason] = useState('candidate_ended');
+
+  // Voice & auto-turn state machine: waiting_speech | listening | transcribing | thinking
+  const [turnPhase, setTurnPhase] = useState('waiting_speech');
+  const [thinkingStage, setThinkingStage] = useState('');
+  const [silenceCountdown, setSilenceCountdown] = useState(null); // 5 -> 4 -> 3 -> 2 -> 1 -> 0
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [micPermissionNeeded, setMicPermissionNeeded] = useState(false);
+  const [micLevels, setMicLevels] = useState(() => Array(14).fill(12));
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [latestAck, setLatestAck] = useState('');
+  const [speechDetected, setSpeechDetected] = useState(false);
+
+  const [ending, setEnding] = useState(false);
+  const [remainingSeconds, setRemainingSeconds] = useState(() =>
+    hasMatchingInitial ? Number(initialFromNav.remainingSeconds ?? initialFromNav.durationMinutes * 60) : 0
+  );
+
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [aiConn, setAiConn] = useState({ reachable: true, label: 'Connected · Local AI' });
+
+  const bootStartedRef = useRef(false);
+  const autoEndedRef = useRef(false);
+  const lastQuestionHandledRef = useRef('');
+  const endingRef = useRef(false);
+  const micEnabledRef = useRef(true);
+  const turnPhaseRef = useRef('waiting_speech');
+
+  // Persistent mic hardware refs (kept open across the entire interview)
+  const mediaStreamRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordTimerRef = useRef(null);
+  const vadRafRef = useRef(null);
+  const speakTimeoutRef = useRef(null);
+  const transcribeAbortRef = useRef(null);
+  const discardOnStopRef = useRef(false);
+  const hasSpokenRef = useRef(false);
+  const lastVoiceAtRef = useRef(0);
+  const listenStartedAtRef = useRef(0);
+  const noiseFloorRef = useRef(0.012);
+  const lastCountdownValRef = useRef(null);
+
+  useEffect(() => {
+    endingRef.current = ending;
+  }, [ending]);
+
+  useEffect(() => {
+    micEnabledRef.current = micEnabled;
+  }, [micEnabled]);
+
+  useEffect(() => {
+    turnPhaseRef.current = turnPhase;
+  }, [turnPhase]);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      teardownPersistentMic();
+      if (speakTimeoutRef.current) clearTimeout(speakTimeoutRef.current);
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      if (transcribeAbortRef.current) transcribeAbortRef.current.abort();
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function checkStatus() {
+      try {
+        const res = await api.get('/interview/ai-status');
+        if (!active) return;
+        const whisperReady = Boolean(res?.whisper?.available);
+        setAiConn({
+          reachable: Boolean(res?.reachable),
+          label: `${res?.llm?.model || 'Local AI'} · ${whisperReady ? 'Whisper Offline STT' : 'STT Loading'}`,
+        });
+      } catch {
+        if (active) setAiConn({ reachable: false, label: 'AI Service Offline' });
+      }
+    }
+    checkStatus();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function loadOrStartSession() {
+      if (sessionId) {
+        if (hasMatchingInitial) {
+          setLoadingSession(false);
+          return;
+        }
+        setLoadingSession(true);
+        setBootError('');
+        try {
+          const remote = await api.get(`/interview/${encodeURIComponent(sessionId)}`);
+          if (!active) return;
+          if (remote.status === 'completed' || remote.status === 'expired') {
+            navigate(`/interview/report/${encodeURIComponent(remote.id || sessionId)}`, { replace: true });
+            return;
+          }
+          setSession(remote);
+          setRemainingSeconds(Number(remote.remainingSeconds ?? remote.durationMinutes * 60));
+        } catch (err) {
+          if (!active) return;
+          setBootError(err.message || 'Unable to load interview session.');
+        } finally {
+          if (active) setLoadingSession(false);
+        }
+        return;
+      }
+
+      if (bootStartedRef.current) return;
+      bootStartedRef.current = true;
+      setLoadingSession(true);
+      setBootError('');
+      try {
+        const category = searchParams.get('category') || 'Technical Interview';
+        const difficulty = searchParams.get('difficulty') || 'Intermediate';
+        const mode = searchParams.get('mode') || 'Strict Technical Interviewer';
+        const jobRole = searchParams.get('jobRole') || 'Software Engineer';
+        const durationMinutes = Number(searchParams.get('durationMinutes')) || 20;
+        const resumeId = searchParams.get('resumeId') || undefined;
+        const seedQuestion = searchParams.get('seedQuestion') || undefined;
+
+        const res = await api.post('/interview/start', {
+          jobRole,
+          category,
+          difficulty,
+          mode,
+          durationMinutes,
+          resumeId,
+          seedQuestion,
+        });
+        if (!active) return;
+        if (!res?.session?.id) {
+          throw new Error('Server did not return a valid interview session.');
+        }
+        setSession(res.session);
+        setRemainingSeconds(Number(res.session.remainingSeconds ?? durationMinutes * 60));
+        navigate(`/interview/room/${encodeURIComponent(res.session.id)}`, {
+          replace: true,
+          state: { initialSession: res.session },
+        });
+      } catch (err) {
+        if (!active) return;
+        setBootError(err.message || 'Unable to start live AI interview session.');
+      } finally {
+        if (active) setLoadingSession(false);
+      }
+    }
+
+    loadOrStartSession();
+    return () => {
+      active = false;
+    };
+  }, [sessionId, hasMatchingInitial, navigate, searchParams]);
+
+  useEffect(() => {
+    if (!session || session.status !== 'active') return undefined;
+    const interval = setInterval(() => {
+      setRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [session?.id, session?.status]);
+
+  useEffect(() => {
+    if (!session || session.status !== 'active') return;
+    if (remainingSeconds === 0 && !autoEndedRef.current && !ending) {
+      autoEndedRef.current = true;
+      handleEndInterview('time_expired');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remainingSeconds, session?.status]);
+
+  useEffect(() => {
+    if (turnPhase !== 'thinking') {
+      setThinkingStage('');
+      return undefined;
+    }
+    setThinkingStage('Evaluating spoken answer...');
+    const t1 = setTimeout(() => setThinkingStage('AI thinking...'), 1600);
+    const t2 = setTimeout(() => setThinkingStage('Preparing next question...'), 6000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [turnPhase]);
+
+  function stopRecorderOnly(discard = false) {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    if (vadRafRef.current) {
+      cancelAnimationFrame(vadRafRef.current);
+      vadRafRef.current = null;
+    }
+    discardOnStopRef.current = discard;
+    const rec = mediaRecorderRef.current;
+    if (rec && rec.state !== 'inactive') {
+      try {
+        rec.stop();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function teardownPersistentMic() {
+    stopRecorderOnly(true);
+    if (audioCtxRef.current) {
+      try {
+        audioCtxRef.current.close();
+      } catch {
+        // ignore
+      }
+      audioCtxRef.current = null;
+    }
+    analyserRef.current = null;
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+    }
+    setMicLevels(Array(14).fill(12));
+  }
+
+  async function ensurePersistentMic() {
+    if (mediaStreamRef.current && mediaStreamRef.current.active) {
+      setMicPermissionNeeded(false);
+      return mediaStreamRef.current;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setActionError('Microphone recording is unavailable in this browser. Open InterviewIQ in Chrome or Edge.');
+      return null;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      setMicPermissionNeeded(false);
+
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const src = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        src.connect(analyser);
+        audioCtxRef.current = ctx;
+        analyserRef.current = analyser;
+      }
+      return stream;
+    } catch (err) {
+      setMicPermissionNeeded(true);
+      setActionError(
+        err?.name === 'NotAllowedError'
+          ? 'Microphone access is required for hands-free voice answers. Click "Enable Microphone" below.'
+          : err?.message || 'Unable to access microphone.'
+      );
+      return null;
+    }
+  }
+
+  async function beginListeningTurn() {
+    if (endingRef.current || !micEnabledRef.current) return;
+    if (turnPhaseRef.current === 'listening' || turnPhaseRef.current === 'transcribing' || turnPhaseRef.current === 'thinking') {
+      return;
+    }
+
+    const stream = await ensurePersistentMic();
+    if (!stream || endingRef.current) return;
+
+    if (audioCtxRef.current?.state === 'suspended') {
+      audioCtxRef.current.resume().catch(() => {});
+    }
+
+    const mimeType = pickSupportedAudioMime();
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    audioChunksRef.current = [];
+    discardOnStopRef.current = false;
+    hasSpokenRef.current = false;
+    setSpeechDetected(false);
+    setSilenceCountdown(null);
+    lastCountdownValRef.current = null;
+    noiseFloorRef.current = 0.012;
+    const now = Date.now();
+    listenStartedAtRef.current = now;
+    lastVoiceAtRef.current = now;
+
+    recorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) {
+        audioChunksRef.current.push(ev.data);
+      }
+    };
+
+    recorder.onstop = async () => {
+      if (recordTimerRef.current) {
+        clearInterval(recordTimerRef.current);
+        recordTimerRef.current = null;
+      }
+      if (vadRafRef.current) {
+        cancelAnimationFrame(vadRafRef.current);
+        vadRafRef.current = null;
+      }
+      setMicLevels(Array(14).fill(12));
+      setSilenceCountdown(null);
+
+      const chunks = [...audioChunksRef.current];
+      const chosenMime = recorder.mimeType || mimeType || 'audio/webm';
+      const shouldDiscard = discardOnStopRef.current || endingRef.current;
+      const spokeAudio = hasSpokenRef.current;
+
+      if (shouldDiscard) return;
+
+      const blob = new Blob(chunks, { type: chosenMime });
+      await processRecordedTurn(blob, chosenMime, spokeAudio);
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start(250);
+    setRecordingSeconds(0);
+    setTurnPhase('listening');
+    turnPhaseRef.current = 'listening';
+
+    recordTimerRef.current = setInterval(() => {
+      setRecordingSeconds((s) => s + 1);
+    }, 1000);
+
+    // Real-time Web Audio VAD + 5-to-0 auto-countdown loop
+    const analyser = analyserRef.current;
+    if (analyser) {
+      const timeData = new Uint8Array(analyser.fftSize);
+      const freqData = new Uint8Array(analyser.frequencyBinCount);
+
+      const monitorAudio = () => {
+        if (turnPhaseRef.current !== 'listening' || endingRef.current) return;
+
+        analyser.getByteTimeDomainData(timeData);
+        let sumSq = 0;
+        for (let i = 0; i < timeData.length; i += 1) {
+          const norm = (timeData[i] - 128) / 128;
+          sumSq += norm * norm;
+        }
+        const rms = Math.sqrt(sumSq / timeData.length);
+
+        // Adaptive ambient noise calibration during quiet gaps
+        if (rms < noiseFloorRef.current) {
+          noiseFloorRef.current = noiseFloorRef.current * 0.9 + rms * 0.1;
+        } else if (!hasSpokenRef.current && Date.now() - listenStartedAtRef.current < 450) {
+          noiseFloorRef.current = Math.min(0.04, noiseFloorRef.current * 0.8 + rms * 0.2);
+        }
+
+        const speechThreshold = Math.max(0.025, noiseFloorRef.current * 2.2);
+        const ts = Date.now();
+
+        if (rms > speechThreshold) {
+          hasSpokenRef.current = true;
+          setSpeechDetected(true);
+          lastVoiceAtRef.current = ts;
+          if (lastCountdownValRef.current !== null) {
+            lastCountdownValRef.current = null;
+            setSilenceCountdown(null);
+          }
+        } else {
+          // Wait 1.0s of silence before counting down 5 -> 4 -> 3 -> 2 -> 1 -> 0
+          const refTime = hasSpokenRef.current ? lastVoiceAtRef.current : listenStartedAtRef.current;
+          const silentMs = ts - refTime;
+          if (silentMs >= 1000) {
+            const elapsedAfterGrace = silentMs - 1000;
+            const remaining = Math.max(0, 5 - Math.floor(elapsedAfterGrace / 1000));
+            if (lastCountdownValRef.current !== remaining) {
+              lastCountdownValRef.current = remaining;
+              setSilenceCountdown(remaining);
+            }
+            if (elapsedAfterGrace >= 5000) {
+              stopRecorderOnly(false);
+              return;
+            }
+          }
+        }
+
+        analyser.getByteFrequencyData(freqData);
+        const bars = Array.from({ length: 14 }, (_, idx) => {
+          const v = freqData[idx % freqData.length] || 0;
+          return Math.max(12, Math.min(100, Math.round((v / 255) * 100)));
+        });
+        setMicLevels(bars);
+
+        vadRafRef.current = requestAnimationFrame(monitorAudio);
+      };
+
+      vadRafRef.current = requestAnimationFrame(monitorAudio);
+    }
+  }
+
+  async function processRecordedTurn(blob, mimeType, spokeAudio) {
+    setActionError('');
+
+    let answerText = '';
+    if (spokeAudio && blob && blob.size >= 512) {
+      setTurnPhase('transcribing');
+      turnPhaseRef.current = 'transcribing';
+
+      const ext = mimeType.includes('ogg')
+        ? 'ogg'
+        : mimeType.includes('mp4')
+          ? 'm4a'
+          : mimeType.includes('wav')
+            ? 'wav'
+            : 'webm';
+      const form = new FormData();
+      form.append('file', blob, `spoken_answer.${ext}`);
+
+      const token = readAuthToken();
+      const controller = new AbortController();
+      transcribeAbortRef.current = controller;
+
+      try {
+        const resp = await fetch('/api/interview/transcribe', {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: form,
+          signal: controller.signal,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && String(data.transcript || '').trim()) {
+          answerText = String(data.transcript).trim();
+        } else if (resp.status !== 422) {
+          throw new Error(data.message || `Transcription error (${resp.status}).`);
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        setActionError(err.message || 'Voice transcription failed. Retrying microphone listening...');
+        setTurnPhase('waiting_speech');
+        if (micEnabledRef.current) {
+          setTimeout(() => beginListeningTurn(), 600);
+        }
+        return;
+      } finally {
+        transcribeAbortRef.current = null;
+      }
+    }
+
+    if (!answerText) {
+      answerText = 'Candidate remained silent during the 5-second response countdown.';
+    }
+
+    await submitAnswerToAI(answerText);
+  }
+
+  async function submitAnswerToAI(answerText) {
+    if (!session || endingRef.current) return;
+    setTurnPhase('thinking');
+    turnPhaseRef.current = 'thinking';
+    setActionError('');
+
+    try {
+      const res = await api.post('/interview/answer', {
+        sessionId: session.id,
+        answer: answerText,
+        submissionId: makeSubmissionId(),
+      });
+
+      if (res.latestTurn?.conversational_response) {
+        setLatestAck(res.latestTurn.conversational_response);
+      }
+
+      if (res.session) {
+        setSession(res.session);
+        if (typeof res.session.remainingSeconds === 'number') {
+          setRemainingSeconds(res.session.remainingSeconds);
+        }
+      }
+
+      if (res.interviewComplete || res.expired || res.session?.status === 'completed' || res.session?.status === 'expired') {
+        const targetId = res.reportId || res.session?.id || session.id;
+        if (res.session?.status !== 'active' && targetId) {
+          teardownPersistentMic();
+          navigate(`/interview/report/${encodeURIComponent(targetId)}`, { replace: true });
+          return;
+        }
+        setEndError('Interview completed, but report persistence could not be confirmed. Click Retry Report Generation.');
+      }
+    } catch (err) {
+      setActionError(err.message || 'AI evaluation failed. Re-enabling microphone so you can continue.');
+      setTurnPhase('waiting_speech');
+      if (micEnabledRef.current) {
+        setTimeout(() => beginListeningTurn(), 800);
+      }
+    }
+  }
+
+  function finishTurnNow() {
+    if (turnPhase === 'listening') {
+      stopRecorderOnly(false);
+    }
+  }
+
+  function skipSpeechAndListen() {
+    if (speakTimeoutRef.current) {
+      clearTimeout(speakTimeoutRef.current);
+      speakTimeoutRef.current = null;
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+    beginListeningTurn();
+  }
+
+  // Whenever a new active question arrives: speak it first (mic gated), THEN open mic automatically
+  useEffect(() => {
+    if (!session || session.status !== 'active' || ending) return undefined;
+    const qText = String(session.currentQuestion || '').trim();
+    if (!qText || lastQuestionHandledRef.current === qText) return undefined;
+    lastQuestionHandledRef.current = qText;
+
+    // Gate mic cleanly while interviewer starts speaking the question
+    stopRecorderOnly(true);
+    setTurnPhase('waiting_speech');
+    turnPhaseRef.current = 'waiting_speech';
+    if (speakTimeoutRef.current) clearTimeout(speakTimeoutRef.current);
+
+    if (!ttsEnabled || !('speechSynthesis' in window)) {
+      setIsSpeaking(false);
+      const t = setTimeout(() => beginListeningTurn(), 250);
+      return () => clearTimeout(t);
+    }
+
+    const spokenFull = latestAck ? `${latestAck} ${qText}` : qText;
+    let completed = false;
+    const onSpeechDone = () => {
+      if (completed) return;
+      completed = true;
+      if (speakTimeoutRef.current) {
+        clearTimeout(speakTimeoutRef.current);
+        speakTimeoutRef.current = null;
+      }
+      setIsSpeaking(false);
+      if (!endingRef.current && micEnabledRef.current) {
+        beginListeningTurn();
+      }
+    };
+
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(spokenFull);
+      utterance.rate = 1.02;
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = onSpeechDone;
+      utterance.onerror = onSpeechDone;
+      setIsSpeaking(true);
+      window.speechSynthesis.speak(utterance);
+
+      // Browser safety fallback if SpeechSynthesis omits onend
+      const estMs = Math.max(4500, Math.min(24000, spokenFull.split(/\s+/).length * 520 + 1800));
+      speakTimeoutRef.current = setTimeout(onSpeechDone, estMs);
+    } catch {
+      onSpeechDone();
+    }
+
+    return () => {
+      if (speakTimeoutRef.current) clearTimeout(speakTimeoutRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.currentQuestion, session?.status]);
+
+  async function toggleMicActive() {
+    if (micEnabled) {
+      setMicEnabled(false);
+      micEnabledRef.current = false;
+      stopRecorderOnly(true);
+      setTurnPhase('waiting_speech');
+    } else {
+      setMicEnabled(true);
+      micEnabledRef.current = true;
+      if (!isSpeaking && turnPhase === 'waiting_speech') {
+        await beginListeningTurn();
+      }
+    }
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // ignore if blocked
+    }
+  }
+
+  async function handleEndInterview(reason = 'candidate_ended') {
+    if (!session || ending) return;
+    if (speakTimeoutRef.current) clearTimeout(speakTimeoutRef.current);
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+    teardownPersistentMic();
+
+    setEnding(true);
+    setActionError('');
+    setEndError('');
+    setLastEndReason(reason);
+
+    try {
+      const res = await api.post('/interview/end', {
+        sessionId: session.id,
+        reason,
+      });
+      const persistedId = res?.reportId || res?.report?.id;
+      if (!res?.success || !persistedId || res?.report?.status === 'active') {
+        throw new Error('Backend did not confirm that the final evaluation report was saved.');
+      }
+      navigate(`/interview/report/${encodeURIComponent(persistedId)}`, { replace: true });
+    } catch (err) {
+      autoEndedRef.current = false;
+      setEndError(err.message || 'Failed to generate and save the final evaluation report.');
+      setEnding(false);
+    }
+  }
+
+  const answeredCount = session?.questions?.length || 0;
+  const maxQuestions = session?.maxQuestions || 8;
+  const progressPct = useMemo(
+    () => Math.min(100, Math.round(((answeredCount + 1) / Math.max(1, maxQuestions)) * 100)),
+    [answeredCount, maxQuestions]
+  );
+
+  const aiAvatarStatus =
+    turnPhase === 'thinking' || turnPhase === 'transcribing' || ending
+      ? 'thinking'
+      : isSpeaking
+        ? 'speaking'
+        : turnPhase === 'listening'
+          ? 'listening'
+          : 'idle';
+
+  const aiStatusLabel =
+    ending
+      ? 'Finalizing Report...'
+      : turnPhase === 'transcribing'
+        ? 'Transcribing Speech...'
+        : turnPhase === 'thinking'
+          ? thinkingStage || 'Thinking...'
+          : isSpeaking
+            ? 'Speaking Question — Please Listen'
+            : turnPhase === 'listening'
+              ? speechDetected
+                ? 'Listening — Speak Freely'
+                : 'Mic Active — Listening...'
+              : 'Mic Paused';
+
+  const timerTone =
+    remainingSeconds <= 30
+      ? 'border-rose-500/40 bg-rose-500/15 text-rose-400'
+      : remainingSeconds <= 120
+        ? 'border-amber-500/40 bg-amber-500/15 text-amber-400'
+        : 'border-line bg-surface text-ink';
+
+  if (loadingSession) {
+    return (
+      <div className="flex min-h-screen w-full items-center justify-center bg-paper px-4 text-ink">
+        <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-10 text-center shadow-panel">
+          <Loader2 className="mx-auto h-10 w-10 animate-spin text-signal" />
+          <h2 className="mt-5 font-display text-xl font-bold">Entering AI Interview Room</h2>
+          <p className="mt-2 text-sm text-ink-soft">
+            Connecting to your local AI interviewer and preparing your opening question...
+          </p>
         </div>
+      </div>
+    );
+  }
 
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 rounded-lg bg-navy-800 px-3 py-1.5 text-xs font-semibold">
-            <Clock size={15} className="text-signal-soft" />
-            <span>Time Remaining: <strong className="font-mono text-white">{formatTimer(timerSeconds)}</strong></span>
-          </div>
-
-          <div className="rounded-lg bg-navy-800 px-3 py-1.5 text-xs font-semibold text-white/80">
-            Question <strong className="text-white">{currentIndex + 1}</strong> of {questions.length}
+  if (bootError || !session) {
+    return (
+      <div className="flex min-h-screen w-full items-center justify-center bg-paper px-4 text-ink">
+        <div className="w-full max-w-lg rounded-2xl border border-line bg-surface p-8 text-center shadow-panel">
+          <AlertCircle className="mx-auto h-10 w-10 text-rose-500" />
+          <h2 className="mt-4 font-display text-xl font-bold">Interview Session Unavailable</h2>
+          <p className="mt-2 text-sm text-rose-500">{bootError || 'Session could not be initialized.'}</p>
+          <div className="mt-6 flex justify-center gap-3">
+            <Link
+              to="/interview"
+              className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-semibold text-white dark:bg-signal"
+            >
+              Back to Interview Setup
+            </Link>
           </div>
         </div>
       </div>
+    );
+  }
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Left Column: AI Interviewer & Question Prompt */}
-        <div className="space-y-6 lg:col-span-2">
-          {/* Question Display Card */}
-          <div className="rounded-2xl border border-line bg-surface p-6 shadow-panel">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <span className="rounded-md bg-signal-soft px-2.5 py-1 text-xs font-bold text-signal-deep">
-                  Question {currentIndex + 1}
-                </span>
-                <span className="text-xs text-ink-soft">Single Response Required</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleSpeakQuestion}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1 text-xs font-semibold text-ink hover:bg-paper"
-              >
-                <Volume2 size={14} className={isSpeaking ? 'text-signal animate-pulse' : 'text-ink-soft'} />
-                {isSpeaking ? 'Speaking...' : 'Listen'}
-              </button>
-            </div>
-
-            <h3 className="mt-4 font-display text-lg font-semibold leading-snug text-ink sm:text-xl">
-              "{currentQ.q}"
-            </h3>
-
-            {/* Follow-up question if prompted */}
-            {showFollowUp && (
-              <div className="mt-5 rounded-xl border border-signal/20 bg-signal-soft/40 p-4">
-                <div className="flex items-center gap-2 text-signal-deep">
-                  <Sparkles size={16} />
-                  <span className="font-display text-xs font-bold uppercase tracking-wider">
-                    Interviewer Follow-up
-                  </span>
-                </div>
-                <p className="mt-1 text-sm font-semibold text-ink">
-                  "{currentQ.followUp}"
-                </p>
-              </div>
+  return (
+    <div className="flex min-h-screen w-full flex-col bg-paper text-ink">
+      {/* Top Full-Screen Bar */}
+      <header className="border-b border-line bg-surface px-4 py-3 sm:px-8">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-signal/15 px-3 py-1 text-xs font-semibold text-signal">
+              <Sparkles className="h-3.5 w-3.5" />
+              InterviewIQ Voice Room
+            </span>
+            <span className="rounded-full border border-line bg-paper px-3 py-1 text-xs font-medium text-ink">
+              {session.jobRole || 'Software Engineer'}
+            </span>
+            <span className="rounded-full border border-line bg-paper px-3 py-1 text-xs font-medium text-ink-soft">
+              {session.category}
+            </span>
+            <span className="rounded-full border border-line bg-paper px-3 py-1 text-xs font-semibold capitalize text-ink">
+              {session.currentDifficulty || session.difficulty}
+            </span>
+            {session.resumeFileName && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-jade/15 px-3 py-1 text-xs font-medium text-jade">
+                <FileText className="h-3.5 w-3.5" />
+                {session.resumeFileName}
+              </span>
             )}
           </div>
 
-          {/* Answer Input Section */}
-          <div className="rounded-2xl border border-line bg-surface p-6 shadow-panel">
-            <div className="flex items-center justify-between border-b border-line pb-4">
-              <span className="font-display text-sm font-bold text-ink">Your Response</span>
-              <div className="flex rounded-lg bg-paper p-1 text-xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setInputMode('text')}
-                  className={`rounded-md px-3 py-1 transition-colors ${
-                    inputMode === 'text' ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'
-                  }`}
-                >
-                  Text Response
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInputMode('voice')}
-                  className={`rounded-md px-3 py-1 transition-colors ${
-                    inputMode === 'voice' ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'
-                  }`}
-                >
-                  Voice Recording
-                </button>
-              </div>
+          <div className="flex items-center gap-2.5">
+            <div className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-sm font-bold ${timerTone}`}>
+              <Clock className="h-4 w-4" />
+              {formatClock(remainingSeconds)}
             </div>
 
-            {/* Voice Mode */}
-            {inputMode === 'voice' && (
-              <div className="mt-6 flex flex-col items-center justify-center rounded-xl bg-paper/60 p-8 text-center">
-                <button
-                  type="button"
-                  onClick={handleToggleVoice}
-                  className={`flex h-20 w-20 items-center justify-center rounded-full shadow-lg transition-transform hover:scale-105 ${
-                    isRecording ? 'bg-rose text-white animate-pulse' : 'bg-signal text-white'
-                  }`}
-                >
-                  {isRecording ? <MicOff size={32} /> : <Mic size={32} />}
-                </button>
-                <p className="mt-4 font-display text-base font-bold text-ink">
-                  {isRecording ? 'Listening... Speak your answer now' : 'Click microphone to start speaking'}
-                </p>
-                <p className="mt-1 max-w-sm text-xs text-ink-soft">
-                  Speech-to-text converts your answer automatically. You can review and edit below before submitting.
-                </p>
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                const next = !ttsEnabled;
+                setTtsEnabled(next);
+                if (!next && 'speechSynthesis' in window) {
+                  window.speechSynthesis.cancel();
+                  setIsSpeaking(false);
+                  if (micEnabledRef.current) beginListeningTurn();
+                }
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-paper px-3 py-1.5 text-xs font-semibold text-ink hover:bg-surface"
+            >
+              {ttsEnabled ? <Volume2 className="h-4 w-4 text-signal" /> : <VolumeX className="h-4 w-4 text-ink-mute" />}
+              {ttsEnabled ? 'Audio On' : 'Muted'}
+            </button>
 
-            {/* Text Mode or Transcript Editor */}
-            <div className="mt-4">
-              <label className="block text-xs font-semibold text-ink-soft">
-                {inputMode === 'voice' ? 'Real-time Transcript (Editable):' : 'Type your detailed answer:'}
-              </label>
-              <textarea
-                rows={6}
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Structure your answer with key concepts, trade-offs, and examples..."
-                className="mt-1.5 w-full rounded-xl border border-line bg-paper p-4 text-sm text-ink placeholder:text-ink-faint focus:bg-surface focus:outline-none focus:ring-2 focus:ring-signal"
-              />
-              <div className="mt-2 flex items-center justify-between text-xs text-ink-soft">
-                <span>{answer.trim().split(/\s+/).filter(Boolean).length} words</span>
-                <span>Press Submit to proceed to next question</span>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
-              <button
-                type="button"
-                onClick={handleTriggerFollowUp}
-                disabled={showFollowUp}
-                className="btn-outline text-xs"
-              >
-                <Sparkles size={14} className="text-signal" />
-                {showFollowUp ? 'Follow-up Active' : 'Request Follow-up Question'}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleNextOrFinish}
-                className="btn-primary text-xs"
-              >
-                {currentIndex + 1 < questions.length ? (
-                  <>Submit & Next Question <ArrowRight size={14} /></>
-                ) : (
-                  <>Finish & Generate Report <CheckCircle size={14} /></>
-                )}
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-paper px-3 py-1.5 text-xs font-semibold text-ink hover:bg-surface"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+            >
+              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              <span className="hidden sm:inline">{isFullscreen ? 'Windowed' : 'Fullscreen'}</span>
+            </button>
           </div>
         </div>
 
-        {/* Right Column: AI Interviewer Persona Card & Tips */}
-        <div className="space-y-6">
-          <div className="rounded-2xl border border-line bg-surface p-6 shadow-panel text-center">
-            <div className="relative mx-auto h-24 w-24">
-              <div className="grid h-24 w-24 place-items-center rounded-full bg-navy-900 text-2xl font-bold text-white shadow-lg">
-                AI
+        <div className="mx-auto mt-3 max-w-7xl">
+          <div className="mb-1 flex items-center justify-between text-[11px] font-medium text-ink-soft">
+            <span>
+              Question {Math.min(answeredCount + 1, maxQuestions)} of {maxQuestions}
+            </span>
+            <span>{progressPct}% progress</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-paper">
+            <div
+              className="h-full rounded-full bg-signal transition-all duration-300"
+              style={{ width: `${Math.max(8, progressPct)}%` }}
+            />
+          </div>
+        </div>
+      </header>
+
+      {/* Main Split Interview Stage */}
+      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col justify-center px-4 py-6 sm:px-8">
+        {endError && (
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-500">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-semibold">Final Evaluation Report Failed</p>
+                <p className="text-xs text-ink-soft">{endError}</p>
               </div>
-              {isSpeaking && (
-                <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-signal text-white">
-                  <Volume2 size={13} className="animate-spin" />
+            </div>
+            <button
+              type="button"
+              onClick={() => handleEndInterview(lastEndReason)}
+              disabled={ending}
+              className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+            >
+              {ending ? 'Retrying...' : 'Retry Report Generation'}
+            </button>
+          </div>
+        )}
+
+        {actionError && (
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/35 bg-rose-500/10 px-4 py-3 text-sm text-rose-500">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{actionError}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {micPermissionNeeded && (
+                <button
+                  type="button"
+                  onClick={() => beginListeningTurn()}
+                  className="rounded-lg bg-signal px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  Enable Microphone
+                </button>
+              )}
+              <button type="button" onClick={() => setActionError('')} className="text-xs font-semibold underline">
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="grid items-stretch gap-6 lg:grid-cols-12">
+          {/* LEFT SIDE: AI Interviewer Avatar, Status & Always-On Mic Activity */}
+          <section className="flex flex-col items-center justify-between rounded-2xl border border-line bg-surface p-8 text-center shadow-panel lg:col-span-5">
+            <span
+              className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1 text-xs font-semibold ${
+                aiAvatarStatus === 'speaking'
+                  ? 'bg-signal/15 text-signal'
+                  : aiAvatarStatus === 'listening'
+                    ? 'bg-jade/15 text-jade'
+                    : aiAvatarStatus === 'thinking'
+                      ? 'bg-amber-500/15 text-amber-500'
+                      : 'border border-line bg-paper text-ink-soft'
+              }`}
+            >
+              <Radio className="h-3.5 w-3.5" />
+              {aiStatusLabel}
+            </span>
+
+            <div className="my-8">
+              <AiInterviewerAvatar
+                status={aiAvatarStatus}
+                name={session.interviewerName || 'AI Interviewer'}
+              />
+            </div>
+
+            <div className="w-full space-y-4">
+              <div>
+                <h2 className="font-display text-2xl font-bold text-ink">
+                  {session.interviewerName || 'Vikram'}
+                </h2>
+                <p className="text-xs font-medium text-ink-soft">{session.mode}</p>
+              </div>
+
+              <div className="rounded-xl border border-line bg-paper px-4 py-3">
+                <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-ink-soft">
+                  <span>Live Microphone</span>
+                  <span className={turnPhase === 'listening' ? 'font-semibold text-jade' : 'text-ink-mute'}>
+                    {turnPhase === 'listening'
+                      ? `Always On · ${formatClock(recordingSeconds)}`
+                      : isSpeaking
+                        ? 'Gated while AI speaks'
+                        : 'Processing'}
+                  </span>
+                </div>
+                <div className="flex h-8 items-end justify-center gap-1.5">
+                  {micLevels.map((lvl, idx) => (
+                    <div
+                      key={idx}
+                      className={`w-2 rounded-full transition-all duration-100 ${
+                        turnPhase === 'listening' ? 'bg-jade' : 'bg-line'
+                      }`}
+                      style={{ height: `${lvl}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* RIGHT SIDE: Question Projection Only (No answer input box, No text box, No History) */}
+          <section className="flex flex-col justify-between rounded-2xl border border-line bg-surface p-8 sm:p-10 shadow-panel lg:col-span-7">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-lg bg-signal/15 px-3 py-1 font-bold text-signal">
+                  Question {Math.min(answeredCount + 1, maxQuestions)} / {maxQuestions}
                 </span>
+                {session.currentTopic && (
+                  <span className="rounded-lg border border-line bg-paper px-3 py-1 font-medium text-ink-soft">
+                    {session.currentTopic}
+                  </span>
+                )}
+              </div>
+
+              {isSpeaking && (
+                <button
+                  type="button"
+                  onClick={skipSpeechAndListen}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-signal/30 bg-signal/10 px-3 py-1.5 text-xs font-semibold text-signal hover:bg-signal/20"
+                >
+                  <FastForward className="h-3.5 w-3.5" />
+                  Answer Now
+                </button>
               )}
             </div>
 
-            <h4 className="mt-4 font-display text-base font-bold text-ink">{mode} Evaluator</h4>
-            <p className="mt-1 text-xs text-ink-soft">
-              Active Session · Evaluating Technical Rigor & Articulation
-            </p>
-
-            <div className="mt-5 rounded-xl bg-paper p-3 text-left text-xs space-y-2">
-              <div className="flex justify-between">
-                <span className="text-ink-soft">Tone:</span>
-                <span className="font-semibold text-ink">{mode}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-ink-soft">Questions:</span>
-                <span className="font-semibold text-ink">{currentIndex + 1} / {questions.length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-ink-soft">Rubric:</span>
-                <span className="font-semibold text-ink">4 Metrics Evaluated</span>
-              </div>
+            {/* Clean Question Projection */}
+            <div className="my-auto py-8">
+              {latestAck && (
+                <p className="mb-4 text-sm italic text-ink-soft">
+                  "{latestAck}"
+                </p>
+              )}
+              <h1 className="font-display text-2xl font-semibold leading-relaxed text-ink sm:text-3xl lg:text-[32px]">
+                {session.currentQuestion || 'Preparing your next question...'}
+              </h1>
             </div>
+
+            {/* Minimal Auto-Advance Status Line */}
+            <div className="flex min-h-[48px] flex-wrap items-center justify-between gap-3 border-t border-line pt-4 text-xs">
+              {isSpeaking ? (
+                <span className="inline-flex items-center gap-2 font-medium text-signal">
+                  <Volume2 className="h-4 w-4 animate-pulse" />
+                  Interviewer is asking the question — your mic opens automatically right after.
+                </span>
+              ) : turnPhase === 'transcribing' ? (
+                <span className="inline-flex items-center gap-2 font-medium text-signal">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Transcribing your spoken answer locally...
+                </span>
+              ) : turnPhase === 'thinking' ? (
+                <span className="inline-flex items-center gap-2 font-medium text-amber-400">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {thinkingStage || 'Preparing next question...'}
+                </span>
+              ) : turnPhase === 'listening' ? (
+                silenceCountdown !== null ? (
+                  <span className="inline-flex items-center gap-2.5 font-semibold text-amber-400">
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-amber-500/20 font-mono text-sm font-bold text-amber-400">
+                      {silenceCountdown}
+                    </span>
+                    Silence detected — moving to next question in {silenceCountdown}... (speak to cancel)
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-2 font-medium text-jade">
+                    <Mic className="h-4 w-4 animate-pulse" />
+                    Listening — speak your answer naturally. Auto-advances 5s after you stop speaking.
+                  </span>
+                )
+              ) : micPermissionNeeded ? (
+                <button
+                  type="button"
+                  onClick={() => beginListeningTurn()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-signal px-4 py-2 font-semibold text-white"
+                >
+                  <Mic className="h-4 w-4" />
+                  Enable Microphone to Answer
+                </button>
+              ) : (
+                <span className="text-ink-soft">Microphone paused.</span>
+              )}
+            </div>
+          </section>
+        </div>
+      </main>
+
+      {/* Bottom Control Area */}
+      <footer className="border-t border-line bg-surface px-4 py-3.5 sm:px-8">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-4 text-xs">
+            <span className={`inline-flex items-center gap-1.5 font-medium ${aiConn.reachable ? 'text-jade' : 'text-rose-500'}`}>
+              {aiConn.reachable ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+              {aiConn.label}
+            </span>
+            <span className="text-ink-soft">
+              Mic:{' '}
+              <strong className="text-ink">
+                {!micEnabled
+                  ? 'Paused'
+                  : isSpeaking
+                    ? 'Waiting for AI'
+                    : turnPhase === 'listening'
+                      ? silenceCountdown !== null
+                        ? `Countdown ${silenceCountdown}s`
+                        : 'Always On (Listening)'
+                      : 'Processing'}
+              </strong>
+            </span>
           </div>
 
-          <div className="rounded-xl border border-saffron/30 bg-saffron-soft/40 p-4 text-xs text-saffron">
-            <p className="font-bold flex items-center gap-1.5">
-              <AlertCircle size={15} /> Strategy Tip
-            </p>
-            <p className="mt-1 text-ink-soft leading-relaxed">
-              Answer the question directly in the first 2 sentences before diving into complex theoretical nuances.
-            </p>
+          <div className="flex flex-wrap items-center gap-3">
+            {turnPhase === 'listening' && (
+              <button
+                type="button"
+                onClick={finishTurnNow}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-signal px-4 py-2 text-xs font-semibold text-white hover:opacity-90"
+              >
+                <FastForward className="h-3.5 w-3.5" />
+                Next Question
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={toggleMicActive}
+              disabled={ending || turnPhase === 'thinking' || turnPhase === 'transcribing'}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-paper px-4 py-2 text-xs font-semibold text-ink hover:bg-surface disabled:opacity-50"
+            >
+              {micEnabled ? <Mic className="h-3.5 w-3.5 text-jade" /> : <MicOff className="h-3.5 w-3.5 text-rose-500" />}
+              {micEnabled ? 'Mic Always On' : 'Resume Mic'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleEndInterview('candidate_ended')}
+              disabled={ending || turnPhase === 'thinking' || turnPhase === 'transcribing'}
+              className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+            >
+              <PhoneOff className="h-3.5 w-3.5" />
+              {ending ? 'Generating & Saving Report...' : 'End Interview'}
+            </button>
           </div>
         </div>
-      </div>
+      </footer>
     </div>
   );
 }

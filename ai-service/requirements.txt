@@ -8,3 +8,4 @@ spacy==3.8.18
 scikit-learn==1.9.1
 rapidocr-onnxruntime==1.2.3
 pillow==13.0.0
+faster-whisper==1.2.1

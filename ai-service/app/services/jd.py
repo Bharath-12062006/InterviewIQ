@@ -156,6 +156,26 @@ def _extract_experience_requirements(description: str) -> list:
     return found[:5]
 
 
+_ROLE_BASELINE_SKILLS = {
+    "full stack": (["JavaScript", "TypeScript", "React", "Node.js", "Express.js", "SQL", "MongoDB", "REST API", "Git"], ["Docker", "Unit Testing"]),
+    "backend": (["Node.js", "Python", "SQL", "PostgreSQL", "REST API", "Docker", "Git", "Unit Testing"], ["Redis", "AWS", "Microservices"]),
+    "frontend": (["JavaScript", "TypeScript", "React", "HTML", "CSS", "Tailwind CSS", "REST API", "Git"], ["Next.js", "Unit Testing"]),
+    "data analyst": (["SQL", "Python", "Data Analysis", "Data Visualization", "Statistics"], ["PostgreSQL", "Big Data"]),
+    "data scientist": (["Python", "SQL", "Machine Learning", "Statistics", "Data Analysis", "Scikit-learn"], ["PyTorch", "Deep Learning", "Natural Language Processing"]),
+    "machine learning": (["Python", "Machine Learning", "Scikit-learn", "PyTorch", "SQL", "Data Structures"], ["Docker", "FastAPI", "MLflow"]),
+    "software engineer": (["Data Structures", "Algorithms", "Object Oriented Programming", "SQL", "Git", "REST API"], ["Docker", "Unit Testing", "System Design"]),
+    "devops": (["Linux", "Docker", "Kubernetes", "CI/CD", "AWS", "Git"], ["Terraform", "Bash", "Prometheus"]),
+}
+
+
+def _baseline_skills_for_title(title: str) -> tuple[list, list]:
+    low = (title or "").lower()
+    for cue, (req, pref) in _ROLE_BASELINE_SKILLS.items():
+        if cue in low:
+            return list(req), list(pref)
+    return list(_ROLE_BASELINE_SKILLS["software engineer"][0]), list(_ROLE_BASELINE_SKILLS["software engineer"][1])
+
+
 def analyze_job_description(title: str, description: str) -> dict:
     """Parse target job title & JD into required/preferred skills, keywords, and requirements."""
     clean_title = normalize_whitespace(title) or "Target Role"
@@ -181,6 +201,13 @@ def analyze_job_description(title: str, description: str) -> dict:
             if s_name not in preferred_skills and s_name not in required_skills:
                 preferred_skills.append(s_name)
 
+    has_detailed_jd = len(content_words(clean_desc)) >= 12
+    # If the user supplied only a job title or short prompt without listing skills,
+    # infer transparent baseline skills from the target role so matching stays meaningful.
+    if not has_detailed_jd and not required_skills and not preferred_skills:
+        required_skills, preferred_skills = _baseline_skills_for_title(clean_title)
+        all_detected = required_skills + preferred_skills
+
     keywords = _extract_ranked_keywords(clean_title, clean_desc)
     edu_reqs = _extract_education_requirements(clean_desc)
     exp_reqs = _extract_experience_requirements(clean_desc)
@@ -194,5 +221,5 @@ def analyze_job_description(title: str, description: str) -> dict:
         "educationRequirements": edu_reqs,
         "experienceRequirements": exp_reqs,
         "keywords": keywords,
-        "hasDetailedJD": len(content_words(clean_desc)) >= 12,
+        "hasDetailedJD": has_detailed_jd,
     }

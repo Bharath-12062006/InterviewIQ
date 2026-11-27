@@ -7,6 +7,7 @@ import morgan from 'morgan';
 import mongoose from 'mongoose';
 import { connectDB } from './config/db.js';
 import { removeLegacyDemoAccount } from './seed.js';
+import { ensureAiServiceRunning, stopManagedAiService } from './services/aiServiceManager.js';
 
 // Route imports
 import authRoutes from './routes/auth.js';
@@ -64,6 +65,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/interviews', interviewRoutes);
+app.use('/api/interview', interviewRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/study-plan', studyPlanRoutes);
 app.use('/api/settings', settingsRoutes);
@@ -93,4 +95,17 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`🚀 InterviewIQ Server running on http://localhost:${PORT}`);
   console.log(`📡 Health endpoint: http://localhost:${PORT}/api/health`);
+  ensureAiServiceRunning().catch((err) => {
+    console.warn('AI service startup note:', err.message);
+  });
+});
+
+process.on('SIGINT', () => {
+  stopManagedAiService();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  stopManagedAiService();
+  process.exit(0);
 });

@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { Resume } from '../models/Resume.js';
 import { protect } from '../middleware/auth.js';
+import { ensureAiServiceRunning } from '../services/aiServiceManager.js';
 
 const router = express.Router();
 
@@ -94,7 +95,7 @@ router.post('/analyze', protect, handleUploadMiddleware, async (req, res) => {
       });
     }
 
-    const aiBaseUrl = (process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+    const aiBaseUrl = await ensureAiServiceRunning();
     const aiServiceKey = (process.env.AI_SERVICE_KEY || '').trim();
 
     const forwardForm = new FormData();

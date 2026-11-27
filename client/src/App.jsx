@@ -50,6 +50,24 @@ export default function App() {
             }
           />
 
+          {/* Dedicated Full-Screen Voice Interview Room (Outside Dashboard AppLayout) */}
+          <Route
+            path="interview/room"
+            element={
+              <ProtectedRoute>
+                <InterviewRoom />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="interview/room/:sessionId"
+            element={
+              <ProtectedRoute>
+                <InterviewRoom />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Protected Application Routes (Require Login / Signup) */}
           <Route
             element={
@@ -62,10 +80,10 @@ export default function App() {
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="resume" element={<ResumeAnalyzer />} />
             <Route path="interview" element={<MockInterview />} />
-            <Route path="interview/room" element={<InterviewRoom />} />
             <Route path="coding" element={<CodingPractice />} />
             <Route path="aptitude" element={<AptitudePractice />} />
             <Route path="report/:id" element={<InterviewReport />} />
+            <Route path="interview/report/:id" element={<InterviewReport />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="recommendations" element={<StudyPlan />} />
             <Route path="history" element={<InterviewHistory />} />
